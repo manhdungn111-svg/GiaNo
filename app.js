@@ -109,7 +109,12 @@
     const h2 = { ...headers };
     if (S.token) h2.Authorization = 'Bearer ' + S.token;
     if (body !== undefined && !raw) h2['Content-Type'] = 'application/json';
-    const res = await fetch(path, { method, headers: h2, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+    let res;
+    try {
+      res = await fetch(path, { method, headers: h2, body: body === undefined ? undefined : raw ? body : JSON.stringify(body), signal: AbortSignal.timeout(raw ? 120000 : 20000) });
+    } catch (e) {
+      throw new Error(e && (e.name === 'TimeoutError' || e.name === 'AbortError') ? 'Máy chủ phản hồi quá chậm, hãy thử lại' : 'Không kết nối được máy chủ, kiểm tra mạng rồi thử lại');
+    }
     let data = null;
     try { data = await res.json(); } catch { /* không phải JSON */ }
     if (res.status === 401 && S.token && !/^\/api\/(login|register)/.test(path)) { forceLogout(); throw new Error('Phiên đăng nhập đã hết hạn'); }
@@ -323,12 +328,19 @@
   }
   const syncCur = () => (S.cur && S.msgs.has(S.cur) ? syncConv(S.cur) : Promise.resolve());
 
+  const loadErr = new Map();
   async function loadMessages(id) {
+    loadErr.delete(id);
+    if (S.cur === id) updateMsgs();
     try {
-      const { messages, hasMore } = await api(`/api/messages?conv=${encodeURIComponent(id)}&limit=50`);
-      S.msgs.set(id, messages); S.hasMore.set(id, hasMore);
+      const data = await api(`/api/messages?conv=${encodeURIComponent(id)}&limit=50`);
+      if (!data || !Array.isArray(data.messages)) throw new Error('Máy chủ trả về dữ liệu không đúng');
+      S.msgs.set(id, data.messages); S.hasMore.set(id, !!data.hasMore);
       if (S.cur === id) { updateMsgs(true); markRead(id); }
-    } catch (e) { toast(e.message); }
+    } catch (e) {
+      loadErr.set(id, e.message);
+      if (S.cur === id) updateMsgs();
+    }
   }
   async function loadOlder() {
     const id = S.cur, arr = S.msgs.get(id);
@@ -825,7 +837,13 @@
     const c = convOf(S.cur);
     if (!box || !c) return;
     const arr = S.msgs.get(c.id);
-    if (!arr) { box.replaceChildren(h('div', { class: 'empty', text: 'Đang tải...' })); return; }
+    if (!arr) {
+      const err = loadErr.get(c.id);
+      box.replaceChildren(err
+        ? h('div', { class: 'empty' }, h('p', { text: 'Không tải được tin nhắn: ' + err }), h('button', { class: 'btn', style: 'max-width:200px;margin:12px auto 0', onclick: () => loadMessages(c.id) }, 'Thử lại'))
+        : h('div', { class: 'empty', text: 'Đang tải...' }));
+      return;
+    }
     const stick = forceBottom || box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     const nodes = [];
     if (S.hasMore.get(c.id)) nodes.push(h('div', { class: 'loadmore' }, h('button', { onclick: loadOlder }, 'Tải tin nhắn cũ hơn')));
