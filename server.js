@@ -12,7 +12,11 @@ const crypto = require('node:crypto');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
-const PUBLIC_DIR = path.join(__dirname, 'public');
+// Hỗ trợ 2 kiểu bố cục: có thư mục public/ (chuẩn) hoặc mọi file nằm phẳng ở thư mục gốc (khi tải lên GitHub từ iPhone).
+// Ở kiểu phẳng chỉ phục vụ đúng các tệp giao diện trong danh sách, để không lộ server.js hay dữ liệu.
+const HAS_PUBLIC = fs.existsSync(path.join(__dirname, 'public', 'index.html'));
+const PUBLIC_DIR = HAS_PUBLIC ? path.join(__dirname, 'public') : __dirname;
+const FLAT_FILES = new Set(['index.html', 'app.js', 'boot.js', 'style.css', 'sw.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png']);
 const FILES_DIR = path.join(DATA_DIR, 'files');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -899,6 +903,10 @@ const MIME = {
 function serveStatic(req, res, url) {
   let p = decodeURIComponent(url.pathname);
   if (p === '/') p = '/index.html';
+  if (!HAS_PUBLIC) {
+    if (p.startsWith('/icons/')) p = '/' + p.slice(7); // /icons/x.png -> x.png ở thư mục gốc
+    if (!FLAT_FILES.has(p.slice(1))) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Không tìm thấy'); }
+  }
   const file = path.normalize(path.join(PUBLIC_DIR, p));
   if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -953,7 +961,7 @@ server.on('upgrade', (req, socket) => {
 });
 
 if (require.main === module) {
-  server.listen(PORT, () => console.log(`Zalo Lite chạy tại http://localhost:${PORT}  (dữ liệu: ${DATA_DIR})`));
+  server.listen(PORT, () => console.log(`Zalo Lite chạy tại http://localhost:${PORT}  (dữ liệu: ${DATA_DIR}; giao diện: ${HAS_PUBLIC ? 'public/' : 'thư mục gốc'})`));
   const shutdown = () => { saveNow(); process.exit(0); };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
